@@ -4,9 +4,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Project 001 - Cyberdeck System Module">
-  <title>CYBERDECK // PROJECT 001</title>
+  <meta name="description" content="LYSTAICAD >> SOLIDEDGE • MANAGE">
+  <title>SOLIDEDGE • MANAGE</title>
   <link rel="stylesheet" href="style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 
 <body>
@@ -38,11 +39,11 @@
     <!-- Project Header -->
     <div class="project-header">
       <a href="index.html" class="back-btn">◂ BACK</a>
-      <h1 class="project-title">Project 001</h1>
+      <h1 class="project-title">SOLIDEDGE • MANAGE</h1>
     </div>
 
     <!-- Project Content -->
-    <div class="project-content">
+    <!-- <div class="project-content">
       <div class="info-panel">
         <div class="info-panel-header">// System Info</div>
         <div class="data-line">STATUS : <span>ACTIVE</span></div>
@@ -72,11 +73,42 @@
           </div>
         </div>
       </div>
+    </div> -->
+
+    <!-- Action Bar -->
+    <div id="generate-section" class="action-bar" style="display: none;">
+      <div class="action-buttons">
+        <button class="developer-btn" id="generate-btn" onclick="generatePDFLinks()">GENERATE</button>
+        <button class="developer-btn" id="original-btn" onclick="viewOriginalData()">ORIGINAL</button>
+      </div>
+      <div class="current-filename" id="current-filename"></div>
+    </div>
+    <div class="generated-links-container" id="generated-links-container"></div>
+
+    <!-- Excel Data Viewer -->
+    <div id="excel-viewer" class="excel-viewer"></div>
+
+    <!-- Upload Section -->
+    <div class="upload-section">
+      <!-- File List Container -->
+      <div class="file-list-container" id="file-list-container"></div>
+
+      <!-- Drag & Drop Zone -->
+      <div class="drop-zone" id="drop-zone">
+        <div class="drop-zone-icon">⬆</div>
+        <div class="drop-zone-text">DRAG & DROP .XLSX FILE HERE</div>
+        <div class="drop-zone-sub">Max 100 files, click on a file to view data</div>
+        <input type="file" id="file-input" accept=".xlsx" multiple hidden>
+      </div>
     </div>
 
     <!-- Status Bar -->
     <div class="status-bar">
-      <div><span class="status-dot"></span>MODULE 001 ONLINE</div>
+      <div><span class="status-dot"></span>
+        <span class="status-dot"></span>
+        <span class="status-dot"></span>
+        <span class="status-dot"></span>
+      </div>
       <div>624 / 1440 FILES</div>
     </div>
 
@@ -88,6 +120,283 @@
   </div>
 
   <script src="script.js"></script>
+  <script>
+    // ========================================
+    // IndexedDB - File Persistence
+    // ========================================
+    const DB_NAME = 'LystaicadDB';
+    const DB_VERSION = 2; // Incremented version to recreate store with autoIncrement
+    const STORE_NAME = 'files_v2';
+    const MAX_FILES = 100;
+
+    function openDB() {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+        request.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains(STORE_NAME)) {
+            db.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true });
+          }
+        };
+        request.onsuccess = (e) => resolve(e.target.result);
+        request.onerror = (e) => reject(e.target.error);
+      });
+    }
+
+    async function saveFile(file) {
+      const db = await openDB();
+      const arrayBuffer = await file.arrayBuffer();
+
+      // Check count and enforce limit
+      const countTx = db.transaction(STORE_NAME, 'readonly');
+      const countReq = countTx.objectStore(STORE_NAME).count();
+      const count = await new Promise((res, rej) => {
+        countReq.onsuccess = () => res(countReq.result);
+        countReq.onerror = () => rej(countReq.error);
+      });
+
+      if (count >= MAX_FILES) {
+        alert('File limit reached (100 files). Please delete some files before uploading new ones.');
+        return null;
+      }
+
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
+      const req = store.add({
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        data: arrayBuffer,
+        uploadedAt: new Date().toISOString()
+      });
+
+      return new Promise((resolve, reject) => {
+        tx.oncomplete = () => resolve(req.result); // Returns the inserted ID
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    async function getAllFiles() {
+      const db = await openDB();
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const store = tx.objectStore(STORE_NAME);
+      const request = store.getAll();
+      return new Promise((resolve, reject) => {
+        request.onsuccess = () => resolve(request.result || []);
+        request.onerror = () => reject(request.error);
+      });
+    }
+
+    async function getFile(id) {
+      const db = await openDB();
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const store = tx.objectStore(STORE_NAME);
+      const request = store.get(id);
+      return new Promise((resolve, reject) => {
+        request.onsuccess = () => resolve(request.result || null);
+        request.onerror = () => reject(request.error);
+      });
+    }
+
+    async function deleteFile(id) {
+      const db = await openDB();
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      tx.objectStore(STORE_NAME).delete(id);
+      return new Promise((resolve, reject) => {
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    function formatFileSize(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / 1048576).toFixed(1) + ' MB';
+    }
+
+    // ========================================
+    // UI Rendering
+    // ========================================
+    const fileListContainer = document.getElementById('file-list-container');
+    const excelViewer = document.getElementById('excel-viewer');
+
+    async function renderFileList() {
+      fileListContainer.innerHTML = '';
+      const files = await getAllFiles();
+
+      // Sort newest first
+      files.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+
+      files.forEach(file => {
+        const fileEl = document.createElement('div');
+        fileEl.className = 'uploaded-file';
+        fileEl.onclick = () => viewExcelData(file.id);
+
+        fileEl.innerHTML = `
+          <div class="uploaded-file-info">
+            <span class="uploaded-file-icon">X</span>
+            <div>
+              <div class="uploaded-file-name">${file.name}</div>
+              <div class="uploaded-file-size">${formatFileSize(file.size)} | ${new Date(file.uploadedAt).toLocaleString()}</div>
+            </div>
+          </div>
+          <button class="uploaded-file-remove" onclick="event.stopPropagation(); removeFile(${file.id})">✕</button>
+        `;
+        fileListContainer.appendChild(fileEl);
+      });
+    }
+
+    async function removeFile(id) {
+      await deleteFile(id);
+      renderFileList();
+      excelViewer.style.display = 'none'; // hide viewer if open
+    }
+
+    let currentWorksheet = null;
+    let currentFileId = null;
+
+    async function viewExcelData(id) {
+      currentFileId = id;
+      const file = await getFile(id);
+      if (!file) return;
+
+      document.getElementById('current-filename').textContent = file.name;
+
+      try {
+        const data = new Uint8Array(file.data);
+        const workbook = XLSX.read(data, { type: 'array' });
+
+        // Render first sheet
+        const firstSheetName = workbook.SheetNames[0];
+        currentWorksheet = workbook.Sheets[firstSheetName];
+
+        const htmlStr = XLSX.utils.sheet_to_html(currentWorksheet);
+        excelViewer.innerHTML = htmlStr;
+        excelViewer.style.display = 'block';
+
+        // Show Action Bar
+        document.getElementById('generate-section').style.display = 'flex';
+      } catch (err) {
+        console.error(err);
+        alert('Failed to parse Excel file.');
+      }
+    }
+
+    function viewOriginalData() {
+      if (currentFileId) {
+        viewExcelData(currentFileId);
+      }
+    }
+
+    // ========================================
+    // PDF Link Generation Logic
+    // ========================================
+    function generatePDFLinks() {
+      const table = excelViewer.querySelector('table');
+      if (!table) return;
+
+      const rows = table.querySelectorAll('tr');
+      if (rows.length === 0) return;
+
+      // Add Header
+      const headerRow = rows[0];
+      // Check if already generated
+      if (headerRow.lastElementChild.textContent === 'EXCEL') return;
+
+      const th = document.createElement('th');
+      th.textContent = 'EXCEL';
+      headerRow.appendChild(th);
+
+      // Loop through data rows
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        const cells = row.querySelectorAll('td');
+        const td = document.createElement('td');
+
+        // index 1 is Column B, index 17 is Column R
+        // SheetJS sometimes skips empty columns, so let's get the data directly from the worksheet JSON
+        // to be absolutely safe, but since it's an HTML table, cells[1] and cells[17] map to B and R.
+        // Wait, SheetJS renders all cells. So index 1 is B, index 17 is R.
+        const colB = cells[1] ? cells[1].textContent : "";
+        const colR = cells[17] ? cells[17].textContent : "";
+
+        if (colB && colB.trim() !== "") {
+          let nameStr = colB.trim();
+          if (nameStr.length > 4) nameStr = nameStr.slice(0, -4);
+          let pathStr = colR.trim();
+          const fullPath = pathStr + "\\\\" + nameStr + ".pdf";
+
+          // Note: Browsers CANNOT check if a local file exists due to security restrictions.
+          // So we assume the file exists (Green button).
+          // If a backend server is implemented later, it can check the file and return Red/Green.
+          const isFileExist = true; // Placeholder logic
+
+          if (isFileExist) {
+            td.innerHTML = `<a href="file:///${fullPath.replace(/\\\\/g, '/')}" target="_blank" class="table-action-btn green-btn">PDF</a>`;
+          } else {
+            td.innerHTML = `<span class="table-action-btn red-btn">PDF</span>`;
+          }
+        }
+
+        row.appendChild(td);
+      }
+
+      // Save table state to local storage to persist the generated view
+      localStorage.setItem('lystaicad_table_state', excelViewer.innerHTML);
+    }
+
+    // Override viewExcelData to check for saved state (Backup)
+    const originalViewExcelData = viewExcelData;
+    viewExcelData = async function (id) {
+      // First check if we have a saved state for this specific interaction
+      // For a robust app, we'd save state per file ID. Here we'll clear state if opening a new file
+      // to keep it simple, or you can enhance it later.
+      await originalViewExcelData(id);
+    }
+
+    // ========================================
+    // Drag & Drop Handlers
+    // ========================================
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+
+    async function handleFiles(files) {
+      let added = 0;
+      for (const file of files) {
+        if (!file.name.endsWith('.xlsx')) {
+          alert(`File ${file.name} is not a .xlsx file and was skipped.`);
+          continue;
+        }
+        const res = await saveFile(file);
+        if (res !== null) added++;
+      }
+      if (added > 0) renderFileList();
+    }
+
+    dropZone.addEventListener('click', () => fileInput.click());
+
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) handleFiles(e.target.files);
+    });
+
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('drag-over');
+    });
+
+    dropZone.addEventListener('dragleave', () => {
+      dropZone.classList.remove('drag-over');
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('drag-over');
+      if (e.dataTransfer.files.length > 0) handleFiles(e.dataTransfer.files);
+    });
+
+    // Initial render
+    renderFileList();
+  </script>
 </body>
 
 </html>
